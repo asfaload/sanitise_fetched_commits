@@ -1,0 +1,11 @@
+{
+  "rules": [
+    {
+      "type": "filename_match",
+      "name": "Forbid temporary files",
+      "enabled": true,
+      "patterns": ["**/*.tmp", "**/tmp/**", "**/temp/**"],
+      "action": "forbid"
+    }
+  ]
+}

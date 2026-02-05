@@ -1,0 +1,9 @@
+{
+  "rules": [
+    {
+      "type": "content_deletion",
+      "name": "No deletions allowed",
+      "enabled": true
+    }
+  ]
+}

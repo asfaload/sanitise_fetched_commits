@@ -1,0 +1,29 @@
+{
+  "rules": [
+    {
+      "type": "content_deletion",
+      "name": "No deletions allowed",
+      "enabled": true
+    },
+    {
+      "type": "depth_limit",
+      "name": "Limit folder depth",
+      "enabled": true,
+      "patterns": ["my-dir", "test-dir"],
+      "max_depth": 3
+    },
+    {
+      "type": "filename_match",
+      "name": "Forbid temporary files",
+      "enabled": true,
+      "patterns": ["**/*.tmp", "**/tmp/**", "**/temp/**"],
+      "action": "forbid"
+    },
+    {
+      "type": "content_match",
+      "name": "Validate JSON and CSV",
+      "enabled": true,
+      "patterns": ["**/*.json", "**/*.csv"]
+    }
+  ]
+}
