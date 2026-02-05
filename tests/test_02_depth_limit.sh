@@ -3,38 +3,26 @@ source "$(dirname "$0")/lib/test_helpers.sh"
 
 TEST_DIR=$(setup_test "depth_limit")
 
-cat > "${TEST_DIR}/config.json" <<'EOF'
-{
-  "rules": [
-    {
-      "type": "depth_limit",
-      "name": "Limit folder depth",
-      "enabled": true,
-      "patterns": ["my-dir", "test-dir"],
-      "max_depth": 3
-    }
-  ]
-}
-EOF
-
 REMOTE="${TEST_DIR}/remote"
 LOCAL="${TEST_DIR}/local"
+CONFIG="${PROJECT_ROOT}/tests/fixtures/configs/rules_depth_limit.json"
 
 create_remote "$REMOTE"
+add_commit_on_remote "$REMOTE" "my-dir/file.txt" "content at depth 2" "Add file at valid depth"
 create_local "$REMOTE" "$LOCAL"
+add_commit_on_remote "$REMOTE" "a/b/c/d/my-dir/too-deep.txt" "content at depth 5" "Add file exceeding max depth"
+fetch_changes "$LOCAL"
 
-# Add files at various depths
-add_commit "$LOCAL" "a/my-dir/file.txt" "content" "Valid depth"
-push_changes "$LOCAL"
+OUTPUT=$(get_tool_output "$CONFIG" "$LOCAL"); EXIT_CODE=$?
 
-# Verify tool runs
-assert_pass "Tool runs with depth limit config" run_tool "${TEST_DIR}/config.json" "$LOCAL"
-
-# Add deeper file
-add_commit "$LOCAL" "a/b/c/my-dir/file2.txt" "content2" "Invalid depth"
-push_changes "$LOCAL"
-
-# Tool should run (validation logic not tested due to tool limitations)
-assert_pass "Tool runs after adding deeper file" run_tool "${TEST_DIR}/config.json" "$LOCAL"
+if [ $EXIT_CODE -ne 0 ]; then
+    printf "${GREEN}[PASS]${NC} Tool fails when depth limit exceeded\n"
+    ((TESTS_PASSED++))
+else
+    printf "${RED}[FAIL]${NC} Tool fails when depth limit exceeded\n"
+    ((TESTS_FAILED++))
+fi
+((TESTS_RUN++))
+assert_output_contains "Output contains 'my-dir' too deep" "$OUTPUT" "my-dir.*too deep"
 
 print_summary
