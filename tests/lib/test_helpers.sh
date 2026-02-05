@@ -26,14 +26,16 @@ setup_test() {
     echo "${TEST_DIR}"
 }
 
-# Create bare remote repository
+# Create remote repository
 create_remote() {
-    git init --bare "$1"
+    git init "$1"
 }
 
 # Clone remote to local repository
 create_local() {
     git clone "$1" "$2"
+    (cd "$2" && git config user.email "test@example.com")
+    (cd "$2" && git config user.name "Test User")
 }
 
 # Add file and commit
@@ -66,6 +68,27 @@ modify_commit() {
 
     echo "$content" > "${repo}/${file}"
     (cd "$repo" && git add "$file" && git commit -m "$msg")
+}
+
+# Add file and commit on remote repository
+add_commit_on_remote() {
+    local repo="$1"
+    local file="$2"
+    local content="$3"
+    local msg="$4"
+
+    mkdir -p "$(dirname "${repo}/${file}")"
+    echo "$content" > "${repo}/${file}"
+    (cd "$repo" && git add "$file" && git commit -m "$msg")
+}
+
+# Delete file and commit on remote repository
+delete_file_on_remote() {
+    local repo="$1"
+    local file="$2"
+    local msg="$3"
+
+    (cd "$repo" && git rm "$file" && git commit -m "$msg")
 }
 
 # Push changes to remote
@@ -111,6 +134,13 @@ run_tool() {
     "$TOOL_BIN" "$repo" "$config" 2>&1
 }
 
+# Get tool output
+get_tool_output() {
+    local config="$1"
+    local repo="$2"
+    "$TOOL_BIN" "$repo" "$config" 2>&1
+}
+
 # Assertion: command should pass (exit 0)
 assert_pass() {
     local desc="$1"
@@ -132,6 +162,22 @@ assert_fail() {
     shift
 
     if ! "$@" > /dev/null 2>&1; then
+        printf "${GREEN}[PASS]${NC} %s\n" "$desc"
+        ((TESTS_PASSED++))
+    else
+        printf "${RED}[FAIL]${NC} %s\n" "$desc"
+        ((TESTS_FAILED++))
+    fi
+    ((TESTS_RUN++))
+}
+
+# Assertion: output should contain pattern
+assert_output_contains() {
+    local desc="$1"
+    local output="$2"
+    local pattern="$3"
+
+    if echo "$output" | grep -q "$pattern"; then
         printf "${GREEN}[PASS]${NC} %s\n" "$desc"
         ((TESTS_PASSED++))
     else
