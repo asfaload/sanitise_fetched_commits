@@ -1,14 +1,33 @@
 use anyhow::{anyhow, Context, Result};
+use std::env;
 
 fn main() -> Result<()> {
-    // 1. Open the repository
-    let repo = gix::open(".").context("Failed to open git repository")?;
+    // 1. Parse command line arguments
+    let args: Vec<String> = env::args().collect();
+    let repo_path = args.get(1).map(|s| s.as_str()).unwrap_or(".");
 
-    // 2. Resolve the range: HEAD..origin/main
-    let head_id = repo.head()?.id().ok_or_else(|| anyhow!("HEAD not found"))?;
-    let remote_ref = repo
-        .find_reference("refs/remotes/origin/main")
-        .context("Could not find origin/main. Did you run 'git fetch'?")?;
+    // 2. Open the repository
+    let repo = gix::open(repo_path).context("Failed to open git repository")?;
+
+    // 3. Get the current branch name from HEAD
+    let head = repo.head()?;
+    let referent_name = head
+        .referent_name()
+        .ok_or_else(|| anyhow!("HEAD is detached or not on a branch"))?;
+    let branch_name = referent_name.shorten().to_string();
+
+    // 4. Construct the remote reference path
+    let remote_ref_path = format!("refs/remotes/origin/{}", branch_name);
+    println!("Using remote reference: {}", remote_ref_path);
+
+    // 5. Resolve the range: HEAD..origin/<branch>
+    let head_id = head.id().ok_or_else(|| anyhow!("HEAD not found"))?;
+    let remote_ref = repo.find_reference(&remote_ref_path).with_context(|| {
+        format!(
+            "Could not find {}. Did you run 'git fetch'?",
+            remote_ref_path
+        )
+    })?;
     let remote_id = remote_ref.id();
 
     // 3. Prepare to walk the commits from remote back to HEAD
