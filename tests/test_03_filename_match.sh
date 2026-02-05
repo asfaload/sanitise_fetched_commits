@@ -3,37 +3,26 @@ source "$(dirname "$0")/lib/test_helpers.sh"
 
 TEST_DIR=$(setup_test "filename_forbid")
 
-cat > "${TEST_DIR}/config.json" <<'EOF'
-{
-  "rules": [
-    {
-      "type": "filename_match",
-      "name": "Forbid temporary files",
-      "enabled": true,
-      "patterns": ["**/*.tmp", "**/tmp/**", "**/temp/**"],
-      "action": "forbid"
-    }
-  ]
-}
-EOF
-
 REMOTE="${TEST_DIR}/remote"
 LOCAL="${TEST_DIR}/local"
+CONFIG="${PROJECT_ROOT}/tests/fixtures/configs/rules_filename_forbid.json"
 
 create_remote "$REMOTE"
+add_commit_on_remote "$REMOTE" "normal.txt" "valid content" "Add normal file"
 create_local "$REMOTE" "$LOCAL"
+add_commit_on_remote "$REMOTE" "temp.tmp" "temporary content" "Add forbidden temp file"
+fetch_changes "$LOCAL"
 
-# Add normal file
-add_commit "$LOCAL" "normal.txt" "content" "Normal file"
-push_changes "$LOCAL"
+OUTPUT=$(get_tool_output "$CONFIG" "$LOCAL"); EXIT_CODE=$?
 
-# Verify tool runs
-assert_pass "Tool runs with filename match config" run_tool "${TEST_DIR}/config.json" "$LOCAL"
-
-# Add temp file
-add_commit "$LOCAL" "temp.tmp" "temp content" "Temp file"
-push_changes "$LOCAL"
-
-assert_pass "Tool runs after adding temp file" run_tool "${TEST_DIR}/config.json" "$LOCAL"
+if [ $EXIT_CODE -ne 0 ]; then
+    printf "${GREEN}[PASS]${NC} Tool fails when forbidden filename detected\n"
+    ((TESTS_PASSED++))
+else
+    printf "${RED}[FAIL]${NC} Tool fails when forbidden filename detected\n"
+    ((TESTS_FAILED++))
+fi
+((TESTS_RUN++))
+assert_output_contains "Output contains 'forbidden pattern'" "$OUTPUT" "forbidden pattern"
 
 print_summary
