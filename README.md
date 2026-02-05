@@ -1,6 +1,9 @@
 # Git Verify Tool
 
+EXPERIMENTAL! Not production ready.
+
 A tool for validating git commits against configurable rules defined in a JSON file.
+Vibe-coded exploration that might be the base for a production tool.
 
 ## Usage
 
