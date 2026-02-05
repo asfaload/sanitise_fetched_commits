@@ -15,7 +15,14 @@ fetch_changes "$LOCAL"
 
 OUTPUT=$(get_tool_output "$CONFIG" "$LOCAL"); EXIT_CODE=$?
 
-assert_fail "Tool fails when deletion detected" get_tool_output "$CONFIG" "$LOCAL" > /dev/null 2>&1
+if [ $EXIT_CODE -ne 0 ]; then
+    printf "${GREEN}[PASS]${NC} Tool fails when deletion detected\n"
+    ((TESTS_PASSED++))
+else
+    printf "${RED}[FAIL]${NC} Tool fails when deletion detected\n"
+    ((TESTS_FAILED++))
+fi
+((TESTS_RUN++))
 assert_output_contains "Output contains 'Deletion forbidden'" "$OUTPUT" "Deletion forbidden"
 
 print_summary

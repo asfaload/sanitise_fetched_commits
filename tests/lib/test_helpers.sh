@@ -1,6 +1,9 @@
 #!/bin/bash
 # Test Helpers Library for Git Verify Tool
 
+# Project root (default to parent of tests directory if not set)
+PROJECT_ROOT="${PROJECT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+
 # Tool location
 TOOL_BIN="${PROJECT_ROOT}/target/release/git-verify-tool"
 
