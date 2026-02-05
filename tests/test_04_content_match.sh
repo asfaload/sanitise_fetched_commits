@@ -3,36 +3,26 @@ source "$(dirname "$0")/lib/test_helpers.sh"
 
 TEST_DIR=$(setup_test "content_match")
 
-cat > "${TEST_DIR}/config.json" <<'EOF'
-{
-  "rules": [
-    {
-      "type": "content_match",
-      "name": "Validate JSON and CSV",
-      "enabled": true,
-      "patterns": ["**/*.json", "**/*.csv"]
-    }
-  ]
-}
-EOF
-
 REMOTE="${TEST_DIR}/remote"
 LOCAL="${TEST_DIR}/local"
+CONFIG="${PROJECT_ROOT}/tests/fixtures/configs/rules_content_match.json"
 
 create_remote "$REMOTE"
+add_commit_on_remote "$REMOTE" "valid.json" '{"name":"test","value":42}' "Add valid JSON"
 create_local "$REMOTE" "$LOCAL"
+add_commit_on_remote "$REMOTE" "invalid.json" '{"invalid":}' "Add invalid JSON"
+fetch_changes "$LOCAL"
 
-# Add valid JSON
-add_commit "$LOCAL" "valid.json" '{"name":"test","value":42}' "Valid JSON"
-push_changes "$LOCAL"
+OUTPUT=$(get_tool_output "$CONFIG" "$LOCAL"); EXIT_CODE=$?
 
-# Verify tool runs
-assert_pass "Tool runs with content match config" run_tool "${TEST_DIR}/config.json" "$LOCAL"
-
-# Add invalid JSON
-add_commit "$LOCAL" "invalid.json" '{"invalid":}' "Bad JSON"
-push_changes "$LOCAL"
-
-assert_pass "Tool runs after adding invalid JSON" run_tool "${TEST_DIR}/config.json" "$LOCAL"
+if [ $EXIT_CODE -ne 0 ]; then
+    printf "${GREEN}[PASS]${NC} Tool fails when invalid JSON detected\n"
+    ((TESTS_PASSED++))
+else
+    printf "${RED}[FAIL]${NC} Tool fails when invalid JSON detected\n"
+    ((TESTS_FAILED++))
+fi
+((TESTS_RUN++))
+assert_output_contains "Output contains 'Invalid JSON'" "$OUTPUT" "Invalid JSON"
 
 print_summary
