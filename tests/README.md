@@ -33,50 +33,101 @@ The `lib/test_helpers.sh` provides these helper functions:
 
 ### Setup & Cleanup
 - `setup_test(name)` - Create isolated test directory
-- `create_remote(path)` - Initialize bare git repository
-- `create_local(remote, local)` - Clone from remote
+- `create_remote(path)` - Initialize git repository (remote)
+- `create_local(remote, local)` - Clone from remote to local repository
 
 ### File Operations
 - `add_commit(repo, file, content, msg)` - Add file and commit
 - `delete_commit(repo, file, msg)` - Delete file and commit
 - `modify_commit(repo, file, content, msg)` - Modify file and commit
+- `add_commit_on_remote(repo, file, content, msg)` - Add file and commit on remote (wraps add_commit)
+- `delete_file_on_remote(repo, file, msg)` - Delete file and commit on remote (wraps delete_commit)
 
 ### Git Operations
 - `push_changes(repo)` - Push commits to remote
 - `fetch_changes(repo)` - Fetch from remote
 
+### Configuration
+- `create_config(path)` - Create default empty validation config file
+- `add_rule_to_config(config, rule_json)` - Add a specific rule to existing config file
+
+### Tool Execution
+- `run_tool(config, repo)` - Run git-verify-tool with config on repository, returns stdout+stderr
+- `get_tool_output(config, repo)` - Get tool output (wrapper for run_tool)
+
 ### Assertions
 - `assert_pass(description, command)` - Command should succeed (exit 0)
 - `assert_fail(description, command)` - Command should fail (exit != 0)
+- `assert_output_contains(desc, output, pattern)` - Verify output contains expected pattern
 
 ### Reporting
 - `print_summary()` - Show test results
 
-## Current Test Limitations
+## Test Approach
 
-The current tests primarily verify that the tool runs without crashing in various scenarios. Due to limitations in the tool's validation logic:
+The tests validate git-verify-tool functionality by simulating a realistic workflow:
 
-1. The tool validates commits FROM `origin/master` (remote head) ancestors DOWN TO HEAD (local head)
-2. This means HEAD must be an ancestor of `origin/master` for validation to include any commits
-3. In normal push-ahead scenarios (local HEAD ahead of origin/master), the validation range is empty
+1. **Create remote repository** - Initialize a git repository as the "remote"
+2. **Add initial commits** - Set up baseline state on the remote
+3. **Clone to local** - Create a local clone of the remote
+4. **Add violations on remote** - Push changes that violate validation rules to the remote
+5. **Fetch in local** - Local clone fetches the new commits containing violations
+6. **Run tool on local** - Execute git-verify-tool on the local clone
+7. **Verify detection** - Check that tool detects violations (exit code and output)
 
-Tests currently verify:
-- Tool runs successfully with each rule type
-- Config loading works
-- Basic repo setup/teardown
-- Edge cases (invalid config, missing branches, detached HEAD)
+This approach works because the tool validates commits between HEAD and origin/master. By:
+- Adding violations to the remote repository
+- Fetching those changes in a local clone (which updates origin/master references)
+- Running the tool which validates the commits between local HEAD and the fetched remote state
 
-The tests do NOT fully validate that violations are correctly detected because the test framework cannot reliably create scenarios where the tool's validation logic will traverse the commits containing those violations.
+The tests verify both:
+- **Exit codes**: Non-zero when violations detected
+- **Output patterns**: Expected violation messages in tool output
+
+### Example Test Pattern
+
+```bash
+# 1. Setup test environment
+TEST_DIR=$(setup_test "my_test")
+REMOTE="${TEST_DIR}/remote"
+LOCAL="${TEST_DIR}/local"
+CONFIG="${PROJECT_ROOT}/tests/fixtures/configs/my_rule.json"
+
+# 2. Create remote and add valid baseline
+create_remote "$REMOTE"
+add_commit_on_remote "$REMOTE" "good.txt" "good content" "Good file"
+
+# 3. Create local clone
+create_local "$REMOTE" "$LOCAL"
+
+# 4. Add violation on remote
+add_commit_on_remote "$REMOTE" "bad.txt" "bad content" "Bad file"
+
+# 5. Fetch violation in local
+fetch_changes "$LOCAL"
+
+# 6. Run tool and capture output
+OUTPUT=$(get_tool_output "$CONFIG" "$LOCAL"); EXIT_CODE=$?
+
+# 7. Verify tool detected violation
+if [ $EXIT_CODE -ne 0 ]; then
+    printf "${GREEN}[PASS]${NC} Tool failed on violation\n"
+    ((TESTS_PASSED++))
+fi
+
+# 8. Verify output contains expected message
+assert_output_contains "Output contains expected message" "$OUTPUT" "expected pattern"
+```
 
 ## Test Cases
 
 | Test File | Tests | What It Verifies |
 |-----------|-------|------------------|
-| test_01_no_deletions.sh | 2 | Tool runs with content_deletion rule |
-| test_02_depth_limit.sh | 2 | Tool runs with depth_limit rule |
-| test_03_filename_match.sh | 2 | Tool runs with filename_match rule |
-| test_04_content_match.sh | 2 | Tool runs with content_match rule |
-| test_05_combined_rules.sh | 2 | Tool runs with multiple rules |
+| test_01_no_deletions.sh | 2 | content_deletion rule detects file deletions |
+| test_02_depth_limit.sh | 2 | depth_limit rule validates commit history depth |
+| test_03_filename_match.sh | 2 | filename_match rule detects matching filenames |
+| test_04_content_match.sh | 2 | content_match rule detects matching file patterns |
+| test_05_combined_rules.sh | 2 | Multiple rules work together correctly |
 | test_06_edge_cases.sh | 4 | Error handling (bad config, missing remote, detached HEAD) |
 
 ## Writing New Tests
