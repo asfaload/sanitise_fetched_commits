@@ -39,56 +39,101 @@ create_local() {
 }
 
 # Add file and commit
+# Parameters: repo (path to git repository), file (relative path to file), content (file content), msg (commit message)
+# Returns: 0 on success, 1 on failure
 add_commit() {
     local repo="$1"
     local file="$2"
     local content="$3"
     local msg="$4"
 
-    mkdir -p "$(dirname "${repo}/${file}")"
-    echo "$content" > "${repo}/${file}"
-    (cd "$repo" && git add "$file" && git commit -m "$msg")
+    if [ ! -d "$repo/.git" ]; then
+        echo "Error: Not a git repository: $repo" >&2
+        return 1
+    fi
+
+    if [ -z "$file" ]; then
+        echo "Error: File path required" >&2
+        return 1
+    fi
+
+    if [ -z "$msg" ]; then
+        echo "Error: Commit message required" >&2
+        return 1
+    fi
+
+    mkdir -p "$(dirname "${repo}/${file}")" || return 1
+    echo "$content" > "${repo}/${file}" || return 1
+
+    (cd "$repo" && git add "$file" && git commit -m "$msg") || return 1
 }
 
 # Delete file and commit
+# Parameters: repo (path to git repository), file (relative path to file), msg (commit message)
+# Returns: 0 on success, 1 on failure
 delete_commit() {
     local repo="$1"
     local file="$2"
     local msg="$3"
 
-    (cd "$repo" && git rm "$file" && git commit -m "$msg")
+    if [ ! -d "$repo/.git" ]; then
+        echo "Error: Not a git repository: $repo" >&2
+        return 1
+    fi
+
+    if [ -z "$file" ]; then
+        echo "Error: File path required" >&2
+        return 1
+    fi
+
+    if [ -z "$msg" ]; then
+        echo "Error: Commit message required" >&2
+        return 1
+    fi
+
+    (cd "$repo" && git rm "$file" && git commit -m "$msg") || return 1
 }
 
 # Modify file and commit
+# Parameters: repo (path to git repository), file (relative path to file), content (new file content), msg (commit message)
+# Returns: 0 on success, 1 on failure
 modify_commit() {
     local repo="$1"
     local file="$2"
     local content="$3"
     local msg="$4"
 
-    echo "$content" > "${repo}/${file}"
-    (cd "$repo" && git add "$file" && git commit -m "$msg")
+    if [ ! -d "$repo/.git" ]; then
+        echo "Error: Not a git repository: $repo" >&2
+        return 1
+    fi
+
+    if [ -z "$file" ]; then
+        echo "Error: File path required" >&2
+        return 1
+    fi
+
+    if [ -z "$msg" ]; then
+        echo "Error: Commit message required" >&2
+        return 1
+    fi
+
+    echo "$content" > "${repo}/${file}" || return 1
+    (cd "$repo" && git add "$file" && git commit -m "$msg") || return 1
 }
 
-# Add file and commit on remote repository
+# Add file and commit on remote repository (wrapper for add_commit)
+# Parameters: repo (path to git repository), file (relative path to file), content (file content), msg (commit message)
+# Returns: 0 on success, 1 on failure
 add_commit_on_remote() {
-    local repo="$1"
-    local file="$2"
-    local content="$3"
-    local msg="$4"
-
-    mkdir -p "$(dirname "${repo}/${file}")"
-    echo "$content" > "${repo}/${file}"
-    (cd "$repo" && git add "$file" && git commit -m "$msg")
+    add_commit "$@"
 }
 
-# Delete file and commit on remote repository
+# Delete file and commit on remote repository (wrapper for delete_commit)
+# Parameters: repo (path to git repository), file (relative path to file), msg (commit message)
+# Returns: 0 on success, 1 on failure
 delete_file_on_remote() {
-    local repo="$1"
-    local file="$2"
-    local msg="$3"
-
-    (cd "$repo" && git rm "$file" && git commit -m "$msg")
+    delete_commit "$@"
 }
 
 # Push changes to remote
@@ -128,17 +173,35 @@ add_rule_to_config() {
 }
 
 # Run the git-verify tool
+# Parameters: config (path to config file), repo (path to git repository)
+# Returns: 0 on success, 1 on failure, outputs tool stdout and stderr
 run_tool() {
     local config="$1"
     local repo="$2"
+
+    if [ ! -f "$repo/.git/HEAD" ] 2>/dev/null && [ ! -d "$repo/.git" ]; then
+        echo "Error: Not a git repository: $repo" >&2
+        return 1
+    fi
+
+    if [ ! -f "$config" ]; then
+        echo "Error: Config file not found: $config" >&2
+        return 1
+    fi
+
+    if [ ! -x "$TOOL_BIN" ]; then
+        echo "Error: Tool not found or not executable: $TOOL_BIN" >&2
+        return 1
+    fi
+
     "$TOOL_BIN" "$repo" "$config" 2>&1
 }
 
-# Get tool output
+# Get tool output (wrapper for run_tool)
+# Parameters: config (path to config file), repo (path to git repository)
+# Returns: 0 on success, 1 on failure, outputs tool stdout and stderr
 get_tool_output() {
-    local config="$1"
-    local repo="$2"
-    "$TOOL_BIN" "$repo" "$config" 2>&1
+    run_tool "$@"
 }
 
 # Assertion: command should pass (exit 0)
@@ -172,6 +235,8 @@ assert_fail() {
 }
 
 # Assertion: output should contain pattern
+# Parameters: desc (test description), output (tool output string), pattern (grep pattern to match)
+# Returns: none, updates test counters
 assert_output_contains() {
     local desc="$1"
     local output="$2"
