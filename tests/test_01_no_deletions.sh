@@ -3,39 +3,19 @@ source "$(dirname "$0")/lib/test_helpers.sh"
 
 TEST_DIR=$(setup_test "no_deletions")
 
-cat > "${TEST_DIR}/config.json" <<'EOF'
-{
-  "rules": [
-    {
-      "type": "content_deletion",
-      "name": "No deletions allowed",
-      "enabled": true
-    }
-  ]
-}
-EOF
-
-# Simple test: create a repo and verify tool runs
 REMOTE="${TEST_DIR}/remote"
 LOCAL="${TEST_DIR}/local"
+CONFIG="${PROJECT_ROOT}/tests/fixtures/configs/rules_no_deletion.json"
 
 create_remote "$REMOTE"
+add_commit_on_remote "$REMOTE" "important.txt" "important content" "Add important file"
 create_local "$REMOTE" "$LOCAL"
+delete_file_on_remote "$REMOTE" "important.txt" "Remove important file"
+fetch_changes "$LOCAL"
 
-# Add some commits
-add_commit "$LOCAL" "file1.txt" "content1" "Add file1"
-push_changes "$LOCAL"
-add_commit "$LOCAL" "file2.txt" "content2" "Add file2"
-push_changes "$LOCAL"
+OUTPUT=$(get_tool_output "$CONFIG" "$LOCAL"); EXIT_CODE=$?
 
-# Verify tool runs without crashing
-assert_pass "Tool runs successfully on valid repo" run_tool "${TEST_DIR}/config.json" "$LOCAL"
-
-# Test with invalid config
-cat > "${TEST_DIR}/bad_config.json" <<'EOF'
-{invalid json}
-EOF
-
-assert_fail "Tool fails with invalid config" run_tool "${TEST_DIR}/bad_config.json" "$LOCAL"
+assert_fail "Tool fails when deletion detected" get_tool_output "$CONFIG" "$LOCAL" > /dev/null 2>&1
+assert_output_contains "Output contains 'Deletion forbidden'" "$OUTPUT" "Deletion forbidden"
 
 print_summary
