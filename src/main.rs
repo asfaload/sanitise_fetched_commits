@@ -92,11 +92,30 @@ fn validate_commit(
         |change: gix::object::tree::diff::Change<'_, '_, '_>| {
             let path = change.location().to_string();
 
+            let previous_id = match &change {
+                gix::object::tree::diff::Change::Modification { previous_id, .. } => {
+                    Some(*previous_id)
+                }
+                gix::object::tree::diff::Change::Rewrite { source_id, .. } => {
+                    Some(*source_id)
+                }
+                _ => None,
+            };
+
             match change {
                 gix::object::tree::diff::Change::Deletion { .. } => {
                     if let Some(rule_name) = &rules.content_deletion {
                         println!("   - ❌ {} - Deletion forbidden: {}", rule_name, path);
                         commit_passed = false;
+                    }
+                    for rule in &rules.line_deletion {
+                        if rule.globset.is_match(&path) {
+                            println!(
+                                "   - {} - File deleted (all lines removed): {}",
+                                rule.name, path
+                            );
+                            commit_passed = false;
+                        }
                     }
                 }
                 gix::object::tree::diff::Change::Addition { entry_mode, id, .. }
@@ -151,6 +170,29 @@ fn validate_commit(
                                 }
                             }
                         }
+
+                        if let Some(prev_id) = previous_id {
+                            for rule in &rules.line_deletion {
+                                if rule.globset.is_match(&path) {
+                                    match check_line_deletions(repo, prev_id, id, &path) {
+                                        Ok(true) => {
+                                            println!(
+                                                "   - {} - Lines deleted in protected file: {}",
+                                                rule.name, path
+                                            );
+                                            commit_passed = false;
+                                        }
+                                        Ok(false) => {}
+                                        Err(e) => {
+                                            eprintln!(
+                                                "   - Warning: Could not check line deletions in {}: {}",
+                                                path, e
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -187,4 +229,26 @@ fn validate_blob_content(_repo: &gix::Repository, id: gix::Id<'_>, path: &str) -
         eprintln!("   - ⚠️  Warning: content validation not supported for file: {}", path);
     }
     Ok(())
+}
+
+fn check_line_deletions(
+    _repo: &gix::Repository,
+    previous_id: gix::Id<'_>,
+    current_id: gix::Id<'_>,
+    _path: &str,
+) -> Result<bool> {
+    let old_blob = previous_id.object()?;
+    let new_blob = current_id.object()?;
+
+    let old_content = std::str::from_utf8(old_blob.data.as_slice())
+        .map_err(|_| anyhow!("Binary file, skipping line deletion check"))?;
+    let new_content = std::str::from_utf8(new_blob.data.as_slice())
+        .map_err(|_| anyhow!("Binary file, skipping line deletion check"))?;
+
+    let diff = similar::TextDiff::from_lines(old_content, new_content);
+    let has_deletions = diff
+        .iter_all_changes()
+        .any(|change| change.tag() == similar::ChangeTag::Delete);
+
+    Ok(has_deletions)
 }

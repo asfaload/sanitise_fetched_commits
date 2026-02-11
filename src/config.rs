@@ -31,6 +31,11 @@ pub enum RuleConfig {
         name: String,
         enabled: bool,
     },
+    LineDeletion {
+        name: String,
+        enabled: bool,
+        patterns: Vec<String>,
+    },
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -54,6 +59,7 @@ impl Config {
             depth_limit: vec![],
             content_match: vec![],
             content_deletion: None,
+            line_deletion: vec![],
         };
 
         for rule in &self.rules {
@@ -121,6 +127,22 @@ impl Config {
                     }
                     compiled.content_deletion = Some(name.clone());
                 }
+                RuleConfig::LineDeletion { name, enabled, patterns } => {
+                    if !enabled {
+                        continue;
+                    }
+                    let mut glob_builder = GlobSetBuilder::new();
+                    for pattern in patterns {
+                        let glob = Glob::new(pattern)
+                            .with_context(|| format!("Invalid glob pattern '{}'", pattern))?;
+                        glob_builder.add(glob);
+                    }
+                    let globset = glob_builder.build()?;
+                    compiled.line_deletion.push(CompiledLineDeletionRule {
+                        name: name.clone(),
+                        globset,
+                    });
+                }
             }
         }
 
@@ -134,6 +156,7 @@ pub struct CompiledRules {
     pub depth_limit: Vec<CompiledDepthRule>,
     pub content_match: Vec<CompiledContentMatchRule>,
     pub content_deletion: Option<String>,
+    pub line_deletion: Vec<CompiledLineDeletionRule>,
 }
 
 #[derive(Debug)]
@@ -152,6 +175,12 @@ pub struct CompiledDepthRule {
 
 #[derive(Debug)]
 pub struct CompiledContentMatchRule {
+    pub name: String,
+    pub globset: globset::GlobSet,
+}
+
+#[derive(Debug)]
+pub struct CompiledLineDeletionRule {
     pub name: String,
     pub globset: globset::GlobSet,
 }

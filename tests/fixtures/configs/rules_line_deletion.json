@@ -1,0 +1,10 @@
+{
+  "rules": [
+    {
+      "type": "line_deletion",
+      "name": "No line deletions in protected files",
+      "enabled": true,
+      "patterns": ["**/*.protected", "**/protected/**"]
+    }
+  ]
+}
