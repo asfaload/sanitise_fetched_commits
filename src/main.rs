@@ -5,8 +5,15 @@ mod rules;
 
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
+use gix::prelude::ObjectIdExt;
 
 use cli::{OutputFormat, RunOptions};
+
+fn resolve_ref(repo: &gix::Repository, refspec: &str) -> Result<gix::ObjectId> {
+    repo.rev_parse_single(refspec)
+        .map(|id| id.detach())
+        .with_context(|| format!("Could not resolve ref '{}'", refspec))
+}
 
 fn main() -> Result<()> {
     let args = cli::Cli::parse();
@@ -40,30 +47,70 @@ fn main() -> Result<()> {
 
     let repo = gix::open(&args.repo).context("Failed to open git repository")?;
 
-    let head = repo.head()?;
-    let referent_name = head
-        .referent_name()
-        .ok_or_else(|| anyhow!("HEAD is detached or not on a branch"))?;
-    let branch_name = referent_name.shorten().to_string();
-
-    let remote_ref_path = format!("refs/remotes/{}/{}", opts.remote, branch_name);
-    if matches!(opts.format, OutputFormat::Plain) {
-        println!("Using remote reference: {}", remote_ref_path);
-    }
-
-    let head_id = head.id().ok_or_else(|| anyhow!("HEAD not found"))?;
-    let remote_ref = repo.find_reference(&remote_ref_path).with_context(|| {
-        format!(
-            "Could not find {}. Did you run 'git fetch'?",
-            remote_ref_path
-        )
-    })?;
-    let remote_id = remote_ref.id();
+    let (start_id, stop_id) = match (&args.to, &args.from) {
+        (None, None) => {
+            let head = repo.head()?;
+            let referent_name = head
+                .referent_name()
+                .ok_or_else(|| anyhow!("HEAD is detached or not on a branch"))?;
+            let branch_name = referent_name.shorten().to_string();
+            let remote_ref_path = format!("refs/remotes/{}/{}", opts.remote, branch_name);
+            if matches!(opts.format, OutputFormat::Plain) {
+                println!("Using remote reference: {}", remote_ref_path);
+            }
+            let head_id = head
+                .id()
+                .ok_or_else(|| anyhow!("HEAD not found"))?
+                .detach();
+            let remote_ref = repo.find_reference(&remote_ref_path).with_context(|| {
+                format!(
+                    "Could not find {}. Did you run 'git fetch'?",
+                    remote_ref_path
+                )
+            })?;
+            let remote_id = remote_ref.id().detach();
+            (remote_id, head_id)
+        }
+        (Some(to), None) => {
+            let start = resolve_ref(&repo, to)?;
+            let head = repo.head()?;
+            let head_id = head
+                .id()
+                .ok_or_else(|| anyhow!("HEAD not found"))?
+                .detach();
+            (start, head_id)
+        }
+        (None, Some(from)) => {
+            let stop = resolve_ref(&repo, from)?;
+            let head = repo.head()?;
+            let referent_name = head
+                .referent_name()
+                .ok_or_else(|| anyhow!("HEAD is detached or not on a branch"))?;
+            let branch_name = referent_name.shorten().to_string();
+            let remote_ref_path = format!("refs/remotes/{}/{}", opts.remote, branch_name);
+            if matches!(opts.format, OutputFormat::Plain) {
+                println!("Using remote reference: {}", remote_ref_path);
+            }
+            let remote_ref = repo.find_reference(&remote_ref_path).with_context(|| {
+                format!(
+                    "Could not find {}. Did you run 'git fetch'?",
+                    remote_ref_path
+                )
+            })?;
+            let remote_id = remote_ref.id().detach();
+            (remote_id, stop)
+        }
+        (Some(to), Some(from)) => {
+            let start = resolve_ref(&repo, to)?;
+            let stop = resolve_ref(&repo, from)?;
+            (start, stop)
+        }
+    };
 
     if matches!(opts.format, OutputFormat::Plain) {
         println!(
             "Validating commits from {} down to {}...",
-            remote_id, head_id
+            start_id, stop_id
         );
     }
 
@@ -72,13 +119,13 @@ fn main() -> Result<()> {
     let mut total_violations: usize = 0;
     let mut commit_reports: Vec<output::CommitReport> = Vec::new();
 
-    for commit_info in remote_id.ancestors().first_parent_only().all()? {
-        let commit_id: gix::Id<'_> = commit_info?.id();
-        if commit_id == head_id {
+    for commit_info in start_id.attach(&repo).ancestors().first_parent_only().all()? {
+        let commit_id = commit_info?.id().detach();
+        if commit_id == stop_id {
             break;
         }
 
-        let commit = commit_id.object()?;
+        let commit = commit_id.attach(&repo).object()?;
         let report = validate_commit(&repo, &commit, &mut rules, &opts)?;
         if !report.passed {
             all_passed = false;
@@ -88,8 +135,17 @@ fn main() -> Result<()> {
         commit_reports.push(report);
     }
 
+    let warning = if commits_checked == 0 {
+        Some("No commits found in the specified range.".to_string())
+    } else {
+        None
+    };
+
     match opts.format {
         OutputFormat::Plain => {
+            if let Some(ref w) = warning {
+                println!("Warning: {}", w);
+            }
             println!(
                 "\nChecked {} commit(s), {} violation(s) found.",
                 commits_checked, total_violations
@@ -108,6 +164,7 @@ fn main() -> Result<()> {
                 total_violations,
                 passed: all_passed,
                 commits: commit_reports,
+                warning,
             };
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
@@ -129,6 +186,8 @@ mod output {
         pub total_violations: usize,
         pub passed: bool,
         pub commits: Vec<CommitReport>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub warning: Option<String>,
     }
 
     #[derive(Serialize)]

@@ -40,6 +40,15 @@ Vibe-coded exploration that might be the base for a production tool.
 
 # Custom remote name (default: origin)
 ./target/release/git-verify-tool --remote upstream
+
+# Custom commit range: validate commits from REF_A to REF_B
+./target/release/git-verify-tool --from <older-ref> --to <newer-ref>
+
+# Validate from a specific commit up to the remote tracking branch
+./target/release/git-verify-tool --from abc1234
+
+# Validate from HEAD up to a specific commit
+./target/release/git-verify-tool --to def5678
 ```
 
 ### Exit Codes
@@ -187,6 +196,31 @@ A complete example configuration:
 4. Walks commits from the remote back to HEAD
 5. Validates each commit against all enabled rules
 6. Exits with code 0 if all commits pass, 1 otherwise
+
+## Commit Walking Behavior
+
+The tool walks commits using **first-parent-only traversal**. For merge commits, only the mainline (first parent) is followed — side-branch commits introduced by the merge are not individually validated.
+
+### Default Range
+
+By default, the tool resolves the remote tracking branch (e.g., `refs/remotes/origin/main`) as the start and `HEAD` as the stop. It walks backward from the remote ref and validates each commit until it reaches `HEAD`.
+
+### Custom Range with `--from` / `--to`
+
+- `--to <ref>` overrides the start of the walk (default: remote tracking branch). The tool walks backward from this ref.
+- `--from <ref>` overrides the stop point (default: HEAD). The walk stops when this ref is reached.
+- Both flags accept any git ref: commit hashes, branch names, tags, etc.
+
+| Flags | Behavior |
+|-------|----------|
+| *(none)* | Detect branch, walk from remote tracking ref to HEAD |
+| `--to REF` | Walk from REF to HEAD (skip branch/remote detection) |
+| `--from REF` | Walk from remote tracking ref to REF |
+| `--from A --to B` | Walk from B to A (skip all auto-detection) |
+
+### Empty Range
+
+If no commits are found in the specified range (e.g., `--from` and `--to` point to the same commit), the tool prints a warning and exits with code 0. In JSON mode, the report includes a `"warning"` field.
 
 ## Dependencies
 

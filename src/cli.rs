@@ -36,6 +36,14 @@ pub struct Cli {
     /// Git remote name to compare against
     #[arg(long, default_value = "origin")]
     pub remote: String,
+
+    /// Start of range: walk backward from this ref (default: remote tracking branch)
+    #[arg(long)]
+    pub to: Option<String>,
+
+    /// End of range: stop at this ref (default: HEAD)
+    #[arg(long)]
+    pub from: Option<String>,
 }
 
 #[derive(Debug, Clone)]
