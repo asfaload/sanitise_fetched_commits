@@ -1,0 +1,10 @@
+{
+  "rules": [
+    {
+      "type": "content_match",
+      "name": "Validate structured files",
+      "enabled": true,
+      "patterns": ["**/*.json", "**/*.csv", "**/*.yaml", "**/*.yml", "**/*.toml"]
+    }
+  ]
+}

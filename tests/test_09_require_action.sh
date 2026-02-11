@@ -39,7 +39,7 @@ create_local "$REMOTE2" "$LOCAL2"
 add_commit_on_remote "$REMOTE2" "CHANGELOG.md" "## v1.0.0 - Initial release" "Add changelog"
 fetch_changes "$LOCAL2"
 
-OUTPUT2=$(get_tool_output "$CONFIG" "$LOCAL2"); EXIT_CODE2=$?
+OUTPUT2=$(run_tool_with_flags "$CONFIG" "$LOCAL2" --verbose); EXIT_CODE2=$?
 
 if [ $EXIT_CODE2 -eq 0 ]; then
     printf "${GREEN}[PASS]${NC} Tool passes when required file is present\n"

@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use globset::GlobSet;
 
 use crate::rule::{ChangeContext, ChangeKind, CheckResult, Rule};
@@ -47,10 +47,24 @@ impl Rule for LineDeletionRule {
                 let old_blob = ctx.repo.find_object(previous_id)?;
                 let new_blob = ctx.repo.find_object(ctx.id)?;
 
-                let old_content = std::str::from_utf8(old_blob.data.as_slice())
-                    .map_err(|_| anyhow!("Binary file, skipping line deletion check"))?;
-                let new_content = std::str::from_utf8(new_blob.data.as_slice())
-                    .map_err(|_| anyhow!("Binary file, skipping line deletion check"))?;
+                let old_content = match std::str::from_utf8(old_blob.data.as_slice()) {
+                    Ok(s) => s,
+                    Err(_) => {
+                        return Ok(vec![CheckResult::Warning(format!(
+                            "Binary file detected, skipping line deletion check: {}",
+                            ctx.path
+                        ))]);
+                    }
+                };
+                let new_content = match std::str::from_utf8(new_blob.data.as_slice()) {
+                    Ok(s) => s,
+                    Err(_) => {
+                        return Ok(vec![CheckResult::Warning(format!(
+                            "Binary file detected, skipping line deletion check: {}",
+                            ctx.path
+                        ))]);
+                    }
+                };
 
                 let diff = similar::TextDiff::from_lines(old_content, new_content);
                 let has_deletions = diff

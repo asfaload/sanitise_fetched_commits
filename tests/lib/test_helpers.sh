@@ -195,6 +195,32 @@ get_tool_output() {
     run_tool "$@"
 }
 
+# Run the git-verify tool with extra flags
+# Parameters: config (path to config file), repo (path to git repository), flags... (additional CLI flags)
+# Returns: 0 on success, 1 on failure, outputs tool stdout and stderr
+run_tool_with_flags() {
+    local config="$1"
+    local repo="$2"
+    shift 2
+
+    if [ ! -f "$repo/.git/HEAD" ] 2>/dev/null && [ ! -d "$repo/.git" ]; then
+        echo "Error: Not a git repository: $repo" >&2
+        return 1
+    fi
+
+    if [ ! -f "$config" ]; then
+        echo "Error: Config file not found: $config" >&2
+        return 1
+    fi
+
+    if [ ! -x "$TOOL_BIN" ]; then
+        echo "Error: Tool not found or not executable: $TOOL_BIN" >&2
+        return 1
+    fi
+
+    "$TOOL_BIN" "$repo" "$config" "$@" 2>&1
+}
+
 # Assertion: command should pass (exit 0)
 assert_pass() {
     local desc="$1"

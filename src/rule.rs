@@ -1,5 +1,7 @@
 use anyhow::Result;
 
+use crate::cli::RunOptions;
+
 #[derive(Debug, Clone)]
 pub enum ChangeKind {
     Addition,
@@ -77,10 +79,28 @@ impl CheckResult {
         matches!(self, Self::Violation(_))
     }
 
-    pub fn print(&self, rule_name: &str) {
+    pub fn status_str(&self) -> &str {
+        match self {
+            Self::Violation(_) => "violation",
+            Self::Pass(_) => "pass",
+            Self::Warning(_) => "warning",
+        }
+    }
+
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Violation(msg) | Self::Pass(msg) | Self::Warning(msg) => msg,
+        }
+    }
+
+    pub fn print(&self, rule_name: &str, opts: &RunOptions) {
         match self {
             Self::Violation(msg) => println!("   - \u{274c} {} - {}", rule_name, msg),
-            Self::Pass(msg) => println!("   - \u{2705} {} - {}", rule_name, msg),
+            Self::Pass(msg) => {
+                if opts.verbose {
+                    println!("   - \u{2705} {} - {}", rule_name, msg);
+                }
+            }
             Self::Warning(msg) => println!("   - \u{26a0}\u{fe0f}  {} - {}", rule_name, msg),
         }
     }

@@ -59,6 +59,38 @@ impl Rule for ContentMatchRule {
                     ))]);
                 }
             }
+        } else if ctx.path.ends_with(".yaml") || ctx.path.ends_with(".yml") {
+            let text = match std::str::from_utf8(data) {
+                Ok(t) => t,
+                Err(e) => {
+                    return Ok(vec![CheckResult::Violation(format!(
+                        "Content validation failed in {}: Invalid UTF-8: {}",
+                        ctx.path, e
+                    ))]);
+                }
+            };
+            if let Err(e) = serde_yaml::from_str::<serde_yaml::Value>(text) {
+                return Ok(vec![CheckResult::Violation(format!(
+                    "Content validation failed in {}: Invalid YAML in {}: {}",
+                    ctx.path, ctx.path, e
+                ))]);
+            }
+        } else if ctx.path.ends_with(".toml") {
+            let text = match std::str::from_utf8(data) {
+                Ok(t) => t,
+                Err(e) => {
+                    return Ok(vec![CheckResult::Violation(format!(
+                        "Content validation failed in {}: Invalid UTF-8: {}",
+                        ctx.path, e
+                    ))]);
+                }
+            };
+            if let Err(e) = text.parse::<toml::Value>() {
+                return Ok(vec![CheckResult::Violation(format!(
+                    "Content validation failed in {}: Invalid TOML in {}: {}",
+                    ctx.path, ctx.path, e
+                ))]);
+            }
         } else {
             return Ok(vec![CheckResult::Warning(format!(
                 "content validation not supported for file: {}",

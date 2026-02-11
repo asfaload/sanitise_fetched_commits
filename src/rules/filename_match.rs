@@ -8,15 +8,17 @@ use crate::rule::{ChangeContext, ChangeKind, CheckResult, Rule};
 pub struct FilenameMatchRule {
     name: String,
     globset: GlobSet,
+    patterns: Vec<String>,
     action: Action,
     matched: bool,
 }
 
 impl FilenameMatchRule {
-    pub fn new(name: String, globset: GlobSet, action: Action) -> Self {
+    pub fn new(name: String, globset: GlobSet, patterns: Vec<String>, action: Action) -> Self {
         Self {
             name,
             globset,
+            patterns,
             action,
             matched: false,
         }
@@ -53,9 +55,10 @@ impl Rule for FilenameMatchRule {
 
     fn finalize(&mut self) -> Result<Vec<CheckResult>> {
         if matches!(self.action, Action::Require) && !self.matched {
-            Ok(vec![CheckResult::Violation(
-                "Required file pattern not found in commit".to_string(),
-            )])
+            Ok(vec![CheckResult::Violation(format!(
+                "Required file pattern not found in commit. Expected one of: {:?}",
+                self.patterns
+            ))])
         } else {
             Ok(vec![])
         }
