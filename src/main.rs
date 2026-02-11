@@ -1,7 +1,8 @@
 mod config;
+mod rule;
+mod rules;
 
 use anyhow::{anyhow, Context, Result};
-use std::collections::HashSet;
 use std::env;
 
 fn main() -> Result<()> {
@@ -12,12 +13,13 @@ fn main() -> Result<()> {
 
     let config = config::Config::from_file(config_path)
         .with_context(|| format!("Failed to load config from {}", config_path))?;
-    let rules = config.compile()?;
+
+    let rule_count = config.rules.len();
+    let mut rules = config.compile()?;
 
     println!(
         "Loaded {} validation rules from {}",
-        config.rules.len(),
-        config_path
+        rule_count, config_path
     );
 
     let repo = gix::open(repo_path).context("Failed to open git repository")?;
@@ -54,16 +56,16 @@ fn main() -> Result<()> {
         }
 
         let commit = commit_id.object()?;
-        if !validate_commit(&repo, &commit, &rules)? {
+        if !validate_commit(&repo, &commit, &mut rules)? {
             all_passed = false;
         }
     }
 
     if all_passed {
-        println!("\n✅ All commits passed validation.");
+        println!("\n\u{2705} All commits passed validation.");
         std::process::exit(0);
     } else {
-        println!("\n❌ Validation failed. Aborting.");
+        println!("\n\u{274c} Validation failed. Aborting.");
         std::process::exit(1);
     }
 }
@@ -71,7 +73,7 @@ fn main() -> Result<()> {
 fn validate_commit(
     repo: &gix::Repository,
     commit: &gix::Object<'_>,
-    rules: &config::CompiledRules,
+    rules: &mut [Box<dyn rule::Rule>],
 ) -> Result<bool> {
     let mut commit_passed = true;
     let current_tree = commit.clone().into_commit().tree()?;
@@ -85,114 +87,26 @@ fn validate_commit(
 
     println!("Checking commit: {}", commit.id);
 
-    let mut matched_require_indices: HashSet<usize> = HashSet::new();
+    for rule in rules.iter_mut() {
+        rule.reset();
+    }
 
     parent_tree.changes()?.for_each_to_obtain_tree(
         &current_tree,
         |change: gix::object::tree::diff::Change<'_, '_, '_>| {
-            let path = change.location().to_string();
-
-            let previous_id = match &change {
-                gix::object::tree::diff::Change::Modification { previous_id, .. } => {
-                    Some(*previous_id)
-                }
-                gix::object::tree::diff::Change::Rewrite { source_id, .. } => {
-                    Some(*source_id)
-                }
-                _ => None,
-            };
-
-            match change {
-                gix::object::tree::diff::Change::Deletion { .. } => {
-                    if let Some(rule_name) = &rules.content_deletion {
-                        println!("   - ❌ {} - Deletion forbidden: {}", rule_name, path);
-                        commit_passed = false;
-                    }
-                    for rule in &rules.line_deletion {
-                        if rule.globset.is_match(&path) {
-                            println!(
-                                "   - {} - File deleted (all lines removed): {}",
-                                rule.name, path
-                            );
-                            commit_passed = false;
-                        }
-                    }
-                }
-                gix::object::tree::diff::Change::Addition { entry_mode, id, .. }
-                | gix::object::tree::diff::Change::Modification { entry_mode, id, .. }
-                | gix::object::tree::diff::Change::Rewrite { entry_mode, id, .. } => {
-                    for (idx, rule) in rules.filename_match.iter().enumerate() {
-                        if rule.globset.is_match(&path) {
-                            match rule.action {
-                                config::Action::Forbid => {
-                                    println!(
-                                        "   - ❌ {} - Path matches forbidden pattern: {}",
-                                        rule.name, path
-                                    );
-                                    commit_passed = false;
-                                }
-                                config::Action::Require => {
-                                    println!(
-                                        "   - ✅ {} - Path matches required pattern: {}",
-                                        rule.name, path
-                                    );
-                                    matched_require_indices.insert(idx);
-                                }
-                            }
-                        }
-                    }
-
-                    for rule in &rules.depth_limit {
-                        let parts: Vec<&str> = path.split('/').collect();
-                        for (i, segment) in parts.iter().enumerate() {
-                            if rule.patterns.contains(&segment.to_string()) && i >= rule.max_depth {
-                                println!(
-                                    "   - ❌ {} - Folder '{}' too deep (depth {}): {}",
-                                    rule.name,
-                                    segment,
-                                    i + 1,
-                                    path
-                                );
+            let ctx = rule::ChangeContext::from_change(&change, repo);
+            for rule in rules.iter_mut() {
+                match rule.check_change(&ctx) {
+                    Ok(results) => {
+                        for result in results {
+                            result.print(rule.name());
+                            if result.is_violation() {
                                 commit_passed = false;
                             }
                         }
                     }
-
-                    if entry_mode.is_blob() {
-                        for rule in &rules.content_match {
-                            if rule.globset.is_match(&path) {
-                                if let Err(e) = validate_blob_content(repo, id, &path) {
-                                    println!(
-                                        "   - ❌ {} - Content validation failed in {}: {}",
-                                        rule.name, path, e
-                                    );
-                                    commit_passed = false;
-                                }
-                            }
-                        }
-
-                        if let Some(prev_id) = previous_id {
-                            for rule in &rules.line_deletion {
-                                if rule.globset.is_match(&path) {
-                                    match check_line_deletions(repo, prev_id, id, &path) {
-                                        Ok(true) => {
-                                            println!(
-                                                "   - {} - Lines deleted in protected file: {}",
-                                                rule.name, path
-                                            );
-                                            commit_passed = false;
-                                        }
-                                        Ok(false) => {}
-                                        Err(e) => {
-                                            eprintln!(
-                                                "   - Warning: Could not check line deletions in {}: {}",
-                                                path, e
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                    Err(e) => {
+                        eprintln!("   - Warning: {} error: {}", rule.name(), e);
                     }
                 }
             }
@@ -200,55 +114,14 @@ fn validate_commit(
         },
     )?;
 
-    for (idx, rule) in rules.filename_match.iter().enumerate() {
-        if matches!(rule.action, config::Action::Require) && !matched_require_indices.contains(&idx) {
-            println!(
-                "   - ❌ {} - Required file pattern not found in commit",
-                rule.name
-            );
-            commit_passed = false;
+    for rule in rules.iter_mut() {
+        for result in rule.finalize()? {
+            result.print(rule.name());
+            if result.is_violation() {
+                commit_passed = false;
+            }
         }
     }
 
     Ok(commit_passed)
-}
-
-fn validate_blob_content(_repo: &gix::Repository, id: gix::Id<'_>, path: &str) -> Result<()> {
-    let blob = id.object()?;
-    let data = blob.data.as_slice();
-
-    if path.ends_with(".json") {
-        serde_json::from_slice::<serde_json::Value>(data)
-            .map_err(|e| anyhow!("Invalid JSON in {}: {}", path, e))?;
-    } else if path.ends_with(".csv") {
-        let mut reader = csv::Reader::from_reader(data);
-        for result in reader.records() {
-            result.map_err(|e| anyhow!("Invalid CSV in {}: {}", path, e))?;
-        }
-    } else {
-        eprintln!("   - ⚠️  Warning: content validation not supported for file: {}", path);
-    }
-    Ok(())
-}
-
-fn check_line_deletions(
-    _repo: &gix::Repository,
-    previous_id: gix::Id<'_>,
-    current_id: gix::Id<'_>,
-    _path: &str,
-) -> Result<bool> {
-    let old_blob = previous_id.object()?;
-    let new_blob = current_id.object()?;
-
-    let old_content = std::str::from_utf8(old_blob.data.as_slice())
-        .map_err(|_| anyhow!("Binary file, skipping line deletion check"))?;
-    let new_content = std::str::from_utf8(new_blob.data.as_slice())
-        .map_err(|_| anyhow!("Binary file, skipping line deletion check"))?;
-
-    let diff = similar::TextDiff::from_lines(old_content, new_content);
-    let has_deletions = diff
-        .iter_all_changes()
-        .any(|change| change.tag() == similar::ChangeTag::Delete);
-
-    Ok(has_deletions)
 }

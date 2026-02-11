@@ -2,6 +2,9 @@ use anyhow::{Context, Result};
 use globset::{Glob, GlobSetBuilder};
 use serde::Deserialize;
 
+use crate::rule::Rule;
+use crate::rules::*;
+
 #[derive(Debug, Deserialize)]
 pub struct Config {
     pub rules: Vec<RuleConfig>,
@@ -53,134 +56,79 @@ impl Config {
             .with_context(|| format!("Failed to parse config file: {}", path))
     }
 
-    pub fn compile(&self) -> Result<CompiledRules> {
-        let mut compiled = CompiledRules {
-            filename_match: vec![],
-            depth_limit: vec![],
-            content_match: vec![],
-            content_deletion: None,
-            line_deletion: vec![],
-        };
-
-        for rule in &self.rules {
-            match rule {
-                RuleConfig::FilenameMatch {
-                    name,
-                    enabled,
-                    patterns,
-                    action,
-                } => {
-                    if !enabled {
-                        continue;
-                    }
-                    let mut glob_builder = GlobSetBuilder::new();
-                    for pattern in patterns {
-                        let glob = Glob::new(pattern)
-                            .with_context(|| format!("Invalid glob pattern '{}'", pattern))?;
-                        glob_builder.add(glob);
-                    }
-                    let globset = glob_builder.build()?;
-                    compiled.filename_match.push(CompiledFilenameRule {
-                        name: name.clone(),
-                        globset,
-                        action: action.clone(),
-                    });
-                }
-                RuleConfig::DepthLimit {
-                    name,
-                    enabled,
-                    patterns,
-                    max_depth,
-                } => {
-                    if !enabled {
-                        continue;
-                    }
-                    compiled.depth_limit.push(CompiledDepthRule {
-                        name: name.clone(),
-                        patterns: patterns.clone(),
-                        max_depth: *max_depth,
-                    });
-                }
-                RuleConfig::ContentMatch {
-                    name,
-                    enabled,
-                    patterns,
-                } => {
-                    if !enabled {
-                        continue;
-                    }
-                    let mut glob_builder = GlobSetBuilder::new();
-                    for pattern in patterns {
-                        let glob = Glob::new(pattern)
-                            .with_context(|| format!("Invalid glob pattern '{}'", pattern))?;
-                        glob_builder.add(glob);
-                    }
-                    let globset = glob_builder.build()?;
-                    compiled.content_match.push(CompiledContentMatchRule {
-                        name: name.clone(),
-                        globset,
-                    });
-                }
-                RuleConfig::ContentDeletion { name, enabled } => {
-                    if !enabled {
-                        continue;
-                    }
-                    compiled.content_deletion = Some(name.clone());
-                }
-                RuleConfig::LineDeletion { name, enabled, patterns } => {
-                    if !enabled {
-                        continue;
-                    }
-                    let mut glob_builder = GlobSetBuilder::new();
-                    for pattern in patterns {
-                        let glob = Glob::new(pattern)
-                            .with_context(|| format!("Invalid glob pattern '{}'", pattern))?;
-                        glob_builder.add(glob);
-                    }
-                    let globset = glob_builder.build()?;
-                    compiled.line_deletion.push(CompiledLineDeletionRule {
-                        name: name.clone(),
-                        globset,
-                    });
-                }
-            }
-        }
-
-        Ok(compiled)
+    pub fn compile(self) -> Result<Vec<Box<dyn Rule>>> {
+        self.rules
+            .into_iter()
+            .map(|r| r.compile())
+            .filter_map(|r| r.transpose())
+            .collect()
     }
 }
 
-#[derive(Debug)]
-pub struct CompiledRules {
-    pub filename_match: Vec<CompiledFilenameRule>,
-    pub depth_limit: Vec<CompiledDepthRule>,
-    pub content_match: Vec<CompiledContentMatchRule>,
-    pub content_deletion: Option<String>,
-    pub line_deletion: Vec<CompiledLineDeletionRule>,
+fn build_globset(patterns: &[String]) -> Result<globset::GlobSet> {
+    let mut builder = GlobSetBuilder::new();
+    for pattern in patterns {
+        let glob = Glob::new(pattern)
+            .with_context(|| format!("Invalid glob pattern '{}'", pattern))?;
+        builder.add(glob);
+    }
+    Ok(builder.build()?)
 }
 
-#[derive(Debug)]
-pub struct CompiledFilenameRule {
-    pub name: String,
-    pub globset: globset::GlobSet,
-    pub action: Action,
-}
-
-#[derive(Debug)]
-pub struct CompiledDepthRule {
-    pub name: String,
-    pub patterns: Vec<String>,
-    pub max_depth: usize,
-}
-
-#[derive(Debug)]
-pub struct CompiledContentMatchRule {
-    pub name: String,
-    pub globset: globset::GlobSet,
-}
-
-#[derive(Debug)]
-pub struct CompiledLineDeletionRule {
-    pub name: String,
-    pub globset: globset::GlobSet,
+impl RuleConfig {
+    fn compile(self) -> Result<Option<Box<dyn Rule>>> {
+        match self {
+            RuleConfig::FilenameMatch {
+                name,
+                enabled,
+                patterns,
+                action,
+            } => {
+                if !enabled {
+                    return Ok(None);
+                }
+                let globset = build_globset(&patterns)?;
+                Ok(Some(Box::new(FilenameMatchRule::new(name, globset, action))))
+            }
+            RuleConfig::DepthLimit {
+                name,
+                enabled,
+                patterns,
+                max_depth,
+            } => {
+                if !enabled {
+                    return Ok(None);
+                }
+                Ok(Some(Box::new(DepthLimitRule::new(name, patterns, max_depth))))
+            }
+            RuleConfig::ContentMatch {
+                name,
+                enabled,
+                patterns,
+            } => {
+                if !enabled {
+                    return Ok(None);
+                }
+                let globset = build_globset(&patterns)?;
+                Ok(Some(Box::new(ContentMatchRule::new(name, globset))))
+            }
+            RuleConfig::ContentDeletion { name, enabled } => {
+                if !enabled {
+                    return Ok(None);
+                }
+                Ok(Some(Box::new(ContentDeletionRule::new(name))))
+            }
+            RuleConfig::LineDeletion {
+                name,
+                enabled,
+                patterns,
+            } => {
+                if !enabled {
+                    return Ok(None);
+                }
+                let globset = build_globset(&patterns)?;
+                Ok(Some(Box::new(LineDeletionRule::new(name, globset))))
+            }
+        }
+    }
 }
