@@ -1,0 +1,11 @@
+{
+  "rules": [
+    {
+      "type": "filename_match",
+      "name": "Require changelog",
+      "enabled": true,
+      "patterns": ["**/CHANGELOG.md"],
+      "action": "require"
+    }
+  ]
+}

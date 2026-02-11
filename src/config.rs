@@ -45,7 +45,7 @@ impl Config {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read config file: {}", path))?;
         serde_json::from_str(&content)
-            .with_context(|| format!(" Failed to parse config file: {}", path))
+            .with_context(|| format!("Failed to parse config file: {}", path))
     }
 
     pub fn compile(&self) -> Result<CompiledRules> {

@@ -32,6 +32,8 @@ setup_test() {
 # Create remote repository
 create_remote() {
     git init "$1"
+    (cd "$1" && git config user.email "test@example.com")
+    (cd "$1" && git config user.name "Test User")
 }
 
 # Clone remote to local repository
@@ -159,20 +161,6 @@ create_config() {
   "rules": []
 }
 EOF
-}
-
-# Apply specific rule to config
-add_rule_to_config() {
-    local config="$1"
-    local rule_json="$2"
-
-    # Read existing config
-    local content
-    content=$(cat "$config")
-
-    # Insert rule before closing brace
-    echo "${content%}}}" | sed 's/$/\n  '"${rule_json}"',/' > "${config}.tmp"
-    echo "${config}.tmp"
 }
 
 # Run the git-verify tool

@@ -1,6 +1,7 @@
 mod config;
 
 use anyhow::{anyhow, Context, Result};
+use std::collections::HashSet;
 use std::env;
 
 fn main() -> Result<()> {
@@ -84,6 +85,8 @@ fn validate_commit(
 
     println!("Checking commit: {}", commit.id);
 
+    let mut matched_require_indices: HashSet<usize> = HashSet::new();
+
     parent_tree.changes()?.for_each_to_obtain_tree(
         &current_tree,
         |change: gix::object::tree::diff::Change<'_, '_, '_>| {
@@ -97,8 +100,9 @@ fn validate_commit(
                     }
                 }
                 gix::object::tree::diff::Change::Addition { entry_mode, id, .. }
-                | gix::object::tree::diff::Change::Modification { entry_mode, id, .. } => {
-                    for rule in &rules.filename_match {
+                | gix::object::tree::diff::Change::Modification { entry_mode, id, .. }
+                | gix::object::tree::diff::Change::Rewrite { entry_mode, id, .. } => {
+                    for (idx, rule) in rules.filename_match.iter().enumerate() {
                         if rule.globset.is_match(&path) {
                             match rule.action {
                                 config::Action::Forbid => {
@@ -113,6 +117,7 @@ fn validate_commit(
                                         "   - ✅ {} - Path matches required pattern: {}",
                                         rule.name, path
                                     );
+                                    matched_require_indices.insert(idx);
                                 }
                             }
                         }
@@ -148,11 +153,20 @@ fn validate_commit(
                         }
                     }
                 }
-                gix::object::tree::diff::Change::Rewrite { .. } => {}
             }
             Ok::<_, anyhow::Error>(gix::object::tree::diff::Action::Continue)
         },
     )?;
+
+    for (idx, rule) in rules.filename_match.iter().enumerate() {
+        if matches!(rule.action, config::Action::Require) && !matched_require_indices.contains(&idx) {
+            println!(
+                "   - ❌ {} - Required file pattern not found in commit",
+                rule.name
+            );
+            commit_passed = false;
+        }
+    }
 
     Ok(commit_passed)
 }
@@ -169,6 +183,8 @@ fn validate_blob_content(_repo: &gix::Repository, id: gix::Id<'_>, path: &str) -
         for result in reader.records() {
             result.map_err(|e| anyhow!("Invalid CSV in {}: {}", path, e))?;
         }
+    } else {
+        eprintln!("   - ⚠️  Warning: content validation not supported for file: {}", path);
     }
     Ok(())
 }
