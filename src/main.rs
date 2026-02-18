@@ -268,7 +268,7 @@ fn validate_commit(
                     }
                 }
             }
-            Ok::<_, anyhow::Error>(gix::object::tree::diff::Action::Continue)
+            Ok::<_, anyhow::Error>(gix::object::tree::diff::Action::Continue(()))
         },
     )?;
 

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-gix = "0.67.0"
+gix = "0.79.0"
 anyhow = "1.0"
 serde_json = "1.0"
 csv = "1.3"
