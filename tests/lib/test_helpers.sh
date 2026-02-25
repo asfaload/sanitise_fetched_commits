@@ -31,7 +31,7 @@ setup_test() {
 
 # Create remote repository
 create_remote() {
-    git init "$1"
+    git init --object-format=sha256 "$1"
     (cd "$1" && git config user.email "test@example.com")
     (cd "$1" && git config user.name "Test User")
 }
