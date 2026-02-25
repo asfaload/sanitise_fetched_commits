@@ -2,7 +2,7 @@
 
 EXPERIMENTAL! Not production ready.
 
-A tool for validating git commits against configurable rules defined in a JSON file.
+A tool for validating git commits against configurable rules written as Rhai scripts and defined in a JSON file.
 Vibe-coded exploration that might be the base for a production tool.
 
 ## Usage
@@ -66,123 +66,174 @@ cargo build --release
 
 The tool requires a `validation_rules.json` configuration file in the current directory (or specify a custom path).
 
-### Rule Types
+### Rule Format
 
-#### 1. Content Deletion
-
-Forbids file deletions.
+All rules use the `"script"` type and point to a Rhai (`.rhai`) script file:
 
 ```json
 {
-  "type": "content_deletion",
-  "name": "No file deletions allowed",
-  "enabled": true
-}
-```
-
-#### 2. Depth Limit
-
-Limits how deep specific folder names can appear in the directory structure.
-
-```json
-{
-  "type": "depth_limit",
-  "name": "Limit depth of specific folders",
+  "type": "script",
+  "name": "Human-readable rule name",
   "enabled": true,
-  "patterns": ["my-dir", "my-dir-pending"],
-  "max_depth": 3
+  "script": "path/to/rule.rhai"
 }
 ```
 
-#### 3. Filename Match
+- **type** — Always `"script"`.
+- **name** — A descriptive name shown in output.
+- **enabled** — Set to `false` to skip the rule without removing it.
+- **script** — Path to the `.rhai` script file. Resolved relative to the config file's directory.
 
-Allows or forbids files matching glob patterns.
+### Writing a Rule Script
 
-```json
-{
-  "type": "filename_match",
-  "name": "Forbid temp files",
-  "enabled": true,
-  "patterns": ["**/tmp/**", "**/*.tmp", "**/temp/**"],
-  "action": "forbid"
+A rule script must define a `check_change(ctx)` function. It is called once for every file change in a commit. Optionally define a `finalize()` function that runs after all changes in a commit have been processed (useful for rules that need to see the full commit before deciding).
+
+#### The `ctx` Object
+
+`ctx` is a map passed to `check_change` with these fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `path` | string | File path relative to repository root |
+| `kind` | string | One of `"addition"`, `"deletion"`, `"modification"`, `"rewrite"` |
+| `added_lines` | array of strings | Lines added in this change (empty for deletions) |
+| `deleted_lines` | array of strings | Lines removed in this change (empty for additions) |
+| `content` | string | Full file content after the change (empty for deletions) |
+
+#### Return Values
+
+Use the helper functions to return a result from `check_change` or `finalize`:
+
+- `violation(msg)` — The change violates the rule. Causes a non-zero exit code.
+- `pass(msg)` — The change explicitly passes (shown in `--verbose` mode).
+- `warning(msg)` — Advisory message, does not cause failure.
+- Return nothing (no explicit return, or early `return;`) to silently pass.
+
+#### Stateful Rules with `this` and `finalize()`
+
+The `this` keyword persists state between `check_change` calls within a single commit. State is automatically reset between commits. Use this together with `finalize()` for rules that need to inspect the full set of changes before deciding, such as requiring a specific file to be present.
+
+```rhai
+fn check_change(ctx) {
+    if glob_match("**/CHANGELOG.md", ctx.path) {
+        this.found = true;
+        return pass("CHANGELOG.md found: " + ctx.path);
+    }
+}
+
+fn finalize() {
+    if this.found != true {
+        return violation("CHANGELOG.md is required but was not found in commit");
+    }
 }
 ```
 
-Supported actions:
-- `forbid` - Reject commits with matching paths
-- `require` - Accept commits with matching paths
+#### Helper Functions
 
-#### 4. Content Match
+These functions are available inside Rhai scripts:
 
-Validates content of files matching glob patterns.
+| Function | Description |
+|----------|-------------|
+| `violation(msg)` | Return a violation result |
+| `pass(msg)` | Return a pass result |
+| `warning(msg)` | Return a warning result |
+| `glob_match(pattern, path)` | Test if `path` matches a glob `pattern` |
+| `validate_json(text)` | Returns `true` if `text` is valid JSON |
+| `validate_csv(text)` | Returns `true` if `text` is valid CSV |
+| `validate_yaml(text)` | Returns `true` if `text` is valid YAML |
+| `validate_toml(text)` | Returns `true` if `text` is valid TOML |
 
-```json
-{
-  "type": "content_match",
-  "name": "Validate structured files",
-  "enabled": true,
-  "patterns": ["**/*.json", "**/*.csv", "**/*.yaml", "**/*.yml", "**/*.toml"]
+### Example Scripts
+
+#### Forbid file deletions
+
+```rhai
+fn check_change(ctx) {
+    if ctx.kind == "deletion" {
+        return violation("Deletion forbidden: " + ctx.path);
+    }
 }
 ```
 
-Currently validates:
-- `.json` files for valid JSON syntax
-- `.csv` files for valid CSV format
-- `.yaml` / `.yml` files for valid YAML syntax
-- `.toml` files for valid TOML syntax
+#### Forbid files matching a pattern
 
-#### 5. Line Deletion
-
-Prevents line deletions in protected files. Detects both full file deletions and individual line removals using line-level diffing.
-
-```json
-{
-  "type": "line_deletion",
-  "name": "No line deletions in protected files",
-  "enabled": true,
-  "patterns": ["**/*.protected", "**/protected/**"]
+```rhai
+fn check_change(ctx) {
+    if ctx.kind == "deletion" {
+        return;
+    }
+    if glob_match("**/*.tmp", ctx.path) || glob_match("**/tmp/**", ctx.path) {
+        return violation("Path matches forbidden pattern: " + ctx.path);
+    }
 }
 ```
 
-Binary files are skipped with a warning instead of failing.
+#### Validate structured file content
+
+```rhai
+fn check_change(ctx) {
+    if ctx.kind == "deletion" {
+        return;
+    }
+    if glob_match("**/*.json", ctx.path) {
+        if !validate_json(ctx.content) {
+            return violation("Invalid JSON: " + ctx.path);
+        }
+    }
+    if glob_match("**/*.yaml", ctx.path) || glob_match("**/*.yml", ctx.path) {
+        if !validate_yaml(ctx.content) {
+            return violation("Invalid YAML: " + ctx.path);
+        }
+    }
+}
+```
+
+#### Prevent line deletions in protected files
+
+```rhai
+fn check_change(ctx) {
+    if !glob_match("**/*.protected", ctx.path) && !glob_match("**/protected/**", ctx.path) {
+        return;
+    }
+    if ctx.kind == "deletion" {
+        return violation("File deleted (all lines removed): " + ctx.path);
+    }
+    if ctx.deleted_lines.len() > 0 {
+        return violation("Lines deleted in protected file: " + ctx.path);
+    }
+}
+```
 
 ### Example Configuration
 
-A complete example configuration:
+A complete example configuration with multiple script rules:
 
 ```json
 {
   "rules": [
     {
-      "type": "content_deletion",
-      "name": "No file deletions allowed",
-      "enabled": true
+      "type": "script",
+      "name": "No deletions allowed",
+      "enabled": true,
+      "script": "scripts/content_deletion.rhai"
     },
     {
-      "type": "depth_limit",
-      "name": "Limit depth of specific folders",
+      "type": "script",
+      "name": "Forbid temporary files",
       "enabled": true,
-      "patterns": ["my-dir", "my-dir-pending"],
-      "max_depth": 3
+      "script": "scripts/filename_forbid.rhai"
     },
     {
-      "type": "filename_match",
-      "name": "Forbid temp files",
+      "type": "script",
+      "name": "Validate JSON and CSV",
       "enabled": true,
-      "patterns": ["**/tmp/**", "**/*.tmp", "**/temp/**"],
-      "action": "forbid"
+      "script": "scripts/content_match.rhai"
     },
     {
-      "type": "content_match",
-      "name": "Validate structured files",
+      "type": "script",
+      "name": "Require CHANGELOG",
       "enabled": true,
-      "patterns": ["**/*.json", "**/*.csv", "**/*.yaml", "**/*.toml"]
-    },
-    {
-      "type": "line_deletion",
-      "name": "No line deletions in protected files",
-      "enabled": true,
-      "patterns": ["**/*.protected", "**/protected/**"]
+      "script": "scripts/filename_require.rhai"
     }
   ]
 }
@@ -224,12 +275,13 @@ If no commits are found in the specified range (e.g., `--from` and `--to` point 
 
 ## Dependencies
 
+- `rhai` - Embedded scripting engine for rule scripts
 - `gix` - Git library
 - `anyhow` - Error handling
 - `serde` & `serde_json` - JSON serialization/deserialization
-- `csv` - CSV validation
-- `globset` - Glob pattern matching
-- `similar` - Line-level diffing for line deletion detection
+- `csv` - CSV validation (exposed to scripts via `validate_csv`)
+- `globset` - Glob pattern matching (exposed to scripts via `glob_match`)
+- `similar` - Line-level diffing for computing `added_lines`/`deleted_lines`
 - `clap` - CLI argument parsing
-- `serde_yaml` - YAML validation
-- `toml` - TOML validation
+- `serde_yaml` - YAML validation (exposed to scripts via `validate_yaml`)
+- `toml` - TOML validation (exposed to scripts via `validate_toml`)
