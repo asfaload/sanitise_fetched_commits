@@ -26,7 +26,7 @@ impl ScriptRule {
         let script_content = std::fs::read_to_string(script_path)
             .with_context(|| format!("Failed to read script file: {}", script_path))?;
 
-        let mut engine = Engine::new_raw();
+        let mut engine = Engine::new();
         register_helpers(&mut engine);
 
         let ast = engine
@@ -44,7 +44,9 @@ impl ScriptRule {
             ));
         }
 
-        let has_finalize = ast.iter_functions().any(|f| f.name == "finalize");
+        let has_finalize = ast
+            .iter_functions()
+            .any(|f| f.name == "finalize" && f.params.is_empty());
 
         let scope = Scope::new();
         let state = Dynamic::from(Map::new());
@@ -140,59 +142,57 @@ fn map_result(value: Dynamic) -> Option<CheckResult> {
 
 /// Compute the diff information for a change context.
 /// Returns (added_lines, deleted_lines, content).
-fn compute_diff(ctx: &ChangeContext) -> (Vec<Dynamic>, Vec<Dynamic>, String) {
+fn compute_diff(ctx: &ChangeContext) -> Result<(Vec<Dynamic>, Vec<Dynamic>, String)> {
     match ctx.kind {
         ChangeKind::Addition => {
             if !ctx.entry_mode.is_blob() {
-                return (vec![], vec![], String::new());
+                return Ok((vec![], vec![], String::new()));
             }
-            match ctx.repo.find_object(ctx.id) {
-                Ok(blob) => {
-                    let content = String::from_utf8_lossy(blob.data.as_slice()).to_string();
-                    let added_lines: Vec<Dynamic> = content
-                        .lines()
-                        .map(|l| Dynamic::from(l.to_string()))
-                        .collect();
-                    (added_lines, vec![], content)
-                }
-                Err(_) => (vec![], vec![], String::new()),
-            }
+            let blob = ctx
+                .repo
+                .find_object(ctx.id)
+                .with_context(|| format!("Failed to find added blob for '{}'", ctx.path))?;
+            let content = String::from_utf8_lossy(blob.data.as_slice()).to_string();
+            let added_lines: Vec<Dynamic> = content
+                .lines()
+                .map(|l| Dynamic::from(l.to_string()))
+                .collect();
+            Ok((added_lines, vec![], content))
         }
         ChangeKind::Deletion => {
             if !ctx.entry_mode.is_blob() {
-                return (vec![], vec![], String::new());
+                return Ok((vec![], vec![], String::new()));
             }
             // For deletion, previous_id contains the old blob, but id is the deleted entry
             // The id in a Deletion change refers to the deleted blob
-            match ctx.repo.find_object(ctx.id) {
-                Ok(blob) => {
-                    let old_content = String::from_utf8_lossy(blob.data.as_slice()).to_string();
-                    let deleted_lines: Vec<Dynamic> = old_content
-                        .lines()
-                        .map(|l| Dynamic::from(l.to_string()))
-                        .collect();
-                    (vec![], deleted_lines, String::new())
-                }
-                Err(_) => (vec![], vec![], String::new()),
-            }
+            let blob = ctx
+                .repo
+                .find_object(ctx.id)
+                .with_context(|| format!("Failed to find deleted blob for '{}'", ctx.path))?;
+            let old_content = String::from_utf8_lossy(blob.data.as_slice()).to_string();
+            let deleted_lines: Vec<Dynamic> = old_content
+                .lines()
+                .map(|l| Dynamic::from(l.to_string()))
+                .collect();
+            Ok((vec![], deleted_lines, String::new()))
         }
         ChangeKind::Modification | ChangeKind::Rewrite => {
             if !ctx.entry_mode.is_blob() {
-                return (vec![], vec![], String::new());
+                return Ok((vec![], vec![], String::new()));
             }
             let previous_id = match ctx.previous_id {
                 Some(id) => id,
-                None => return (vec![], vec![], String::new()),
+                None => return Ok((vec![], vec![], String::new())),
             };
 
-            let old_blob = match ctx.repo.find_object(previous_id) {
-                Ok(b) => b,
-                Err(_) => return (vec![], vec![], String::new()),
-            };
-            let new_blob = match ctx.repo.find_object(ctx.id) {
-                Ok(b) => b,
-                Err(_) => return (vec![], vec![], String::new()),
-            };
+            let old_blob = ctx
+                .repo
+                .find_object(previous_id)
+                .with_context(|| format!("Failed to find previous blob for '{}'", ctx.path))?;
+            let new_blob = ctx
+                .repo
+                .find_object(ctx.id)
+                .with_context(|| format!("Failed to find new blob for '{}'", ctx.path))?;
 
             let old_content = String::from_utf8_lossy(old_blob.data.as_slice());
             let new_content = String::from_utf8_lossy(new_blob.data.as_slice()).to_string();
@@ -204,16 +204,16 @@ fn compute_diff(ctx: &ChangeContext) -> (Vec<Dynamic>, Vec<Dynamic>, String) {
             for change in diff.iter_all_changes() {
                 match change.tag() {
                     similar::ChangeTag::Insert => {
-                        added_lines.push(Dynamic::from(change.value().to_string()));
+                        added_lines.push(Dynamic::from(change.value().trim_end_matches('\n').to_string()));
                     }
                     similar::ChangeTag::Delete => {
-                        deleted_lines.push(Dynamic::from(change.value().to_string()));
+                        deleted_lines.push(Dynamic::from(change.value().trim_end_matches('\n').to_string()));
                     }
                     similar::ChangeTag::Equal => {}
                 }
             }
 
-            (added_lines, deleted_lines, new_content)
+            Ok((added_lines, deleted_lines, new_content))
         }
     }
 }
@@ -233,7 +233,7 @@ impl Rule for ScriptRule {
         };
 
         // Compute diff
-        let (added_lines, deleted_lines, content) = compute_diff(ctx);
+        let (added_lines, deleted_lines, content) = compute_diff(ctx)?;
 
         // Build context map for the script
         let mut ctx_map = Map::new();
