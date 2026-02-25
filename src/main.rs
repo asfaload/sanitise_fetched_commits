@@ -1,19 +1,15 @@
 mod cli;
 mod config;
+mod git;
 mod rule;
 mod rules;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use clap::Parser;
-use gix::prelude::ObjectIdExt;
 
 use cli::{OutputFormat, RunOptions};
-
-fn resolve_ref(repo: &gix::Repository, refspec: &str) -> Result<gix::ObjectId> {
-    repo.rev_parse_single(refspec)
-        .map(|id| id.detach())
-        .with_context(|| format!("Could not resolve ref '{}'", refspec))
-}
+use git::GitRepo;
+use rule::{ChangeContext, ChangeKind};
 
 fn main() -> Result<()> {
     let args = cli::Cli::parse();
@@ -45,64 +41,55 @@ fn main() -> Result<()> {
         );
     }
 
-    let repo = gix::open(&args.repo).context("Failed to open git repository")?;
+    let repo = GitRepo::open(&args.repo).context("Failed to open git repository")?;
 
     let (start_id, stop_id) = match (&args.to, &args.from) {
         (None, None) => {
-            let head = repo.head()?;
-            let referent_name = head
-                .referent_name()
-                .ok_or_else(|| anyhow!("HEAD is detached or not on a branch"))?;
-            let branch_name = referent_name.shorten().to_string();
+            let branch_name = repo.head_branch()?;
             let remote_ref_path = format!("refs/remotes/{}/{}", opts.remote, branch_name);
             if matches!(opts.format, OutputFormat::Plain) {
                 println!("Using remote reference: {}", remote_ref_path);
             }
-            let head_id = head
-                .id()
-                .ok_or_else(|| anyhow!("HEAD not found"))?
-                .detach();
-            let remote_ref = repo.find_reference(&remote_ref_path).with_context(|| {
+            let head_id = repo.head_oid()?;
+            let remote_id = repo.resolve_ref(&remote_ref_path).with_context(|| {
                 format!(
                     "Could not find {}. Did you run 'git fetch'?",
                     remote_ref_path
                 )
             })?;
-            let remote_id = remote_ref.id().detach();
             (remote_id, head_id)
         }
         (Some(to), None) => {
-            let start = resolve_ref(&repo, to)?;
-            let head = repo.head()?;
-            let head_id = head
-                .id()
-                .ok_or_else(|| anyhow!("HEAD not found"))?
-                .detach();
+            let start = repo
+                .resolve_ref(to)
+                .with_context(|| format!("Could not resolve ref '{}'", to))?;
+            let head_id = repo.head_oid()?;
             (start, head_id)
         }
         (None, Some(from)) => {
-            let stop = resolve_ref(&repo, from)?;
-            let head = repo.head()?;
-            let referent_name = head
-                .referent_name()
-                .ok_or_else(|| anyhow!("HEAD is detached or not on a branch"))?;
-            let branch_name = referent_name.shorten().to_string();
+            let stop = repo
+                .resolve_ref(from)
+                .with_context(|| format!("Could not resolve ref '{}'", from))?;
+            let branch_name = repo.head_branch()?;
             let remote_ref_path = format!("refs/remotes/{}/{}", opts.remote, branch_name);
             if matches!(opts.format, OutputFormat::Plain) {
                 println!("Using remote reference: {}", remote_ref_path);
             }
-            let remote_ref = repo.find_reference(&remote_ref_path).with_context(|| {
+            let remote_id = repo.resolve_ref(&remote_ref_path).with_context(|| {
                 format!(
                     "Could not find {}. Did you run 'git fetch'?",
                     remote_ref_path
                 )
             })?;
-            let remote_id = remote_ref.id().detach();
             (remote_id, stop)
         }
         (Some(to), Some(from)) => {
-            let start = resolve_ref(&repo, to)?;
-            let stop = resolve_ref(&repo, from)?;
+            let start = repo
+                .resolve_ref(to)
+                .with_context(|| format!("Could not resolve ref '{}'", to))?;
+            let stop = repo
+                .resolve_ref(from)
+                .with_context(|| format!("Could not resolve ref '{}'", from))?;
             (start, stop)
         }
     };
@@ -119,14 +106,13 @@ fn main() -> Result<()> {
     let mut total_violations: usize = 0;
     let mut commit_reports: Vec<output::CommitReport> = Vec::new();
 
-    for commit_info in start_id.attach(&repo).ancestors().first_parent_only().all()? {
-        let commit_id = commit_info?.id().detach();
-        if commit_id == stop_id {
-            break;
-        }
+    // Walk commits from stop_id (exclusive) to start_id (inclusive), first-parent only.
+    // start_id is the newer tip (e.g. remote tracking branch after fetch),
+    // stop_id is the older base (e.g. HEAD before fetch).
+    let commits = repo.list_commits(&stop_id, &start_id)?;
 
-        let commit = commit_id.attach(&repo).object()?;
-        let report = validate_commit(&repo, &commit, &mut rules, &opts)?;
+    for commit_oid in &commits {
+        let report = validate_commit(&repo, commit_oid, &mut rules, &opts)?;
         if !report.passed {
             all_passed = false;
         }
@@ -208,26 +194,13 @@ mod output {
 }
 
 fn validate_commit(
-    repo: &gix::Repository,
-    commit: &gix::Object<'_>,
+    repo: &GitRepo,
+    commit_oid: &str,
     rules: &mut [Box<dyn rule::Rule>],
     opts: &RunOptions,
 ) -> Result<output::CommitReport> {
-    let commit_obj = commit.clone().into_commit();
-    let current_tree = commit_obj.tree()?;
-    let message_raw = commit_obj
-        .message_raw()
-        .map(|m| m.to_string())
-        .unwrap_or_default();
-    let first_line = message_raw.lines().next().unwrap_or("").to_string();
-    let short_hash = &commit.id.to_string()[..8];
-
-    let parent_tree = match commit.clone().into_commit().parent_ids().next() {
-        Some(parent_id) => parent_id.object()?.into_commit().tree()?,
-        None => repo
-            .find_object(gix::hash::ObjectId::empty_tree(repo.object_hash()))?
-            .into_tree(),
-    };
+    let first_line = repo.commit_subject(commit_oid)?;
+    let short_hash = &commit_oid[..8.min(commit_oid.len())];
 
     if matches!(opts.format, OutputFormat::Plain) {
         println!("Checking commit: {} {}", short_hash, first_line);
@@ -240,37 +213,66 @@ fn validate_commit(
     let mut results: Vec<output::ResultEntry> = Vec::new();
     let mut violation_count: usize = 0;
 
-    parent_tree.changes()?.for_each_to_obtain_tree(
-        &current_tree,
-        |change: gix::object::tree::diff::Change<'_, '_, '_>| {
-            let ctx = rule::ChangeContext::from_change(&change, repo);
-            for rule in rules.iter_mut() {
-                match rule.check_change(&ctx) {
-                    Ok(check_results) => {
-                        for cr in check_results {
-                            if matches!(opts.format, OutputFormat::Plain) {
-                                cr.print(rule.name(), opts);
-                            }
-                            if cr.is_violation() {
-                                violation_count += 1;
-                            }
-                            results.push(output::ResultEntry {
-                                rule: rule.name().to_string(),
-                                status: cr.status_str().to_string(),
-                                message: cr.message().to_string(),
-                            });
-                        }
-                    }
-                    Err(e) => {
+    let changes = repo.diff_tree(commit_oid)?;
+
+    for change in &changes {
+        let is_blob =
+            git::is_blob_mode(&change.new_mode) || git::is_blob_mode(&change.old_mode);
+
+        let content = if is_blob && !git::oid_is_null(&change.new_oid) {
+            repo.read_blob(&change.new_oid)
+                .with_context(|| format!("Failed to read new blob for '{}'", change.path))?
+        } else {
+            vec![]
+        };
+
+        let previous_content = if is_blob && !git::oid_is_null(&change.old_oid) {
+            repo.read_blob(&change.old_oid)
+                .with_context(|| format!("Failed to read previous blob for '{}'", change.path))?
+        } else {
+            vec![]
+        };
+
+        let kind = match change.kind {
+            git::TreeChangeKind::Addition => ChangeKind::Addition,
+            git::TreeChangeKind::Deletion => ChangeKind::Deletion,
+            git::TreeChangeKind::Modification => ChangeKind::Modification,
+            git::TreeChangeKind::Rename => ChangeKind::Rewrite,
+        };
+
+        let ctx = ChangeContext {
+            path: change.path.clone(),
+            kind,
+            is_blob,
+            content,
+            previous_content,
+        };
+
+        for rule in rules.iter_mut() {
+            match rule.check_change(&ctx) {
+                Ok(check_results) => {
+                    for cr in check_results {
                         if matches!(opts.format, OutputFormat::Plain) {
-                            eprintln!("   - Warning: {} error: {}", rule.name(), e);
+                            cr.print(rule.name(), opts);
                         }
+                        if cr.is_violation() {
+                            violation_count += 1;
+                        }
+                        results.push(output::ResultEntry {
+                            rule: rule.name().to_string(),
+                            status: cr.status_str().to_string(),
+                            message: cr.message().to_string(),
+                        });
+                    }
+                }
+                Err(e) => {
+                    if matches!(opts.format, OutputFormat::Plain) {
+                        eprintln!("   - Warning: {} error: {}", rule.name(), e);
                     }
                 }
             }
-            Ok::<_, anyhow::Error>(gix::object::tree::diff::Action::Continue(()))
-        },
-    )?;
+        }
+    }
 
     for rule in rules.iter_mut() {
         for cr in rule.finalize()? {

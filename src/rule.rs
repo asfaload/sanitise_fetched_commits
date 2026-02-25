@@ -11,60 +11,12 @@ pub enum ChangeKind {
 }
 
 /// All info a rule needs about a single tree change.
-pub struct ChangeContext<'repo> {
-    pub repo: &'repo gix::Repository,
+pub struct ChangeContext {
     pub path: String,
     pub kind: ChangeKind,
-    pub entry_mode: gix::object::tree::EntryMode,
-    pub id: gix::ObjectId,
-    pub previous_id: Option<gix::ObjectId>,
-}
-
-impl<'repo> ChangeContext<'repo> {
-    pub fn from_change(
-        change: &gix::object::tree::diff::Change<'_, '_, '_>,
-        repo: &'repo gix::Repository,
-    ) -> Self {
-        let path = change.location().to_string();
-        let (kind, entry_mode, id, previous_id) = match change {
-            gix::object::tree::diff::Change::Deletion {
-                entry_mode, id, ..
-            } => (ChangeKind::Deletion, *entry_mode, id.detach(), None),
-            gix::object::tree::diff::Change::Addition {
-                entry_mode, id, ..
-            } => (ChangeKind::Addition, *entry_mode, id.detach(), None),
-            gix::object::tree::diff::Change::Modification {
-                entry_mode,
-                id,
-                previous_id,
-                ..
-            } => (
-                ChangeKind::Modification,
-                *entry_mode,
-                id.detach(),
-                Some(previous_id.detach()),
-            ),
-            gix::object::tree::diff::Change::Rewrite {
-                entry_mode,
-                id,
-                source_id,
-                ..
-            } => (
-                ChangeKind::Rewrite,
-                *entry_mode,
-                id.detach(),
-                Some(source_id.detach()),
-            ),
-        };
-        Self {
-            repo,
-            path,
-            kind,
-            entry_mode,
-            id,
-            previous_id,
-        }
-    }
+    pub is_blob: bool,
+    pub content: Vec<u8>,
+    pub previous_content: Vec<u8>,
 }
 
 /// The result of a rule check on a single change.
