@@ -1,10 +1,10 @@
 {
   "rules": [
     {
-      "type": "content_match",
+      "type": "script",
       "name": "Validate JSON and CSV",
       "enabled": true,
-      "patterns": ["**/*.json", "**/*.csv"]
+      "script": "../scripts/content_match.rhai"
     }
   ]
 }

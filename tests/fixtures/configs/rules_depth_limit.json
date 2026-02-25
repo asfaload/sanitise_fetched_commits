@@ -1,11 +1,10 @@
 {
   "rules": [
     {
-      "type": "depth_limit",
+      "type": "script",
       "name": "Limit folder depth",
       "enabled": true,
-      "patterns": ["my-dir", "test-dir"],
-      "max_depth": 3
+      "script": "../scripts/depth_limit.rhai"
     }
   ]
 }

@@ -1,11 +1,10 @@
 {
   "rules": [
     {
-      "type": "filename_match",
+      "type": "script",
       "name": "Require changelog",
       "enabled": true,
-      "patterns": ["**/CHANGELOG.md"],
-      "action": "require"
+      "script": "../scripts/filename_require.rhai"
     }
   ]
 }

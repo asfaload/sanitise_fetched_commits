@@ -1,11 +1,10 @@
 {
   "rules": [
     {
-      "type": "filename_match",
+      "type": "script",
       "name": "Forbid temporary files",
       "enabled": true,
-      "patterns": ["**/*.tmp", "**/tmp/**", "**/temp/**"],
-      "action": "forbid"
+      "script": "../scripts/filename_forbid.rhai"
     }
   ]
 }

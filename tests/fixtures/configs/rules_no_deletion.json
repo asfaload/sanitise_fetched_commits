@@ -1,9 +1,10 @@
 {
   "rules": [
     {
-      "type": "content_deletion",
+      "type": "script",
       "name": "No deletions allowed",
-      "enabled": true
+      "enabled": true,
+      "script": "../scripts/content_deletion.rhai"
     }
   ]
 }
