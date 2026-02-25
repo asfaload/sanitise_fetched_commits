@@ -1,0 +1,10 @@
+{
+  "rules": [
+    {
+      "type": "script",
+      "name": "no check_change",
+      "enabled": true,
+      "script": "../scripts/no_check_change.rhai"
+    }
+  ]
+}

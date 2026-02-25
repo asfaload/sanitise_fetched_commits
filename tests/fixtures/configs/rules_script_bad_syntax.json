@@ -1,0 +1,10 @@
+{
+  "rules": [
+    {
+      "type": "script",
+      "name": "bad syntax",
+      "enabled": true,
+      "script": "../scripts/bad_syntax.rhai"
+    }
+  ]
+}

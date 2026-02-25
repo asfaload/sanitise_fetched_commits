@@ -1,0 +1,10 @@
+{
+  "rules": [
+    {
+      "type": "script",
+      "name": "missing script",
+      "enabled": true,
+      "script": "../scripts/nonexistent.rhai"
+    }
+  ]
+}
