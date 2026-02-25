@@ -9,6 +9,8 @@ use crate::rules::*;
 #[derive(Debug, Deserialize)]
 pub struct Config {
     pub rules: Vec<RuleConfig>,
+    #[serde(skip)]
+    pub config_dir: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -39,6 +41,11 @@ pub enum RuleConfig {
         name: String,
         enabled: bool,
         patterns: Vec<String>,
+    },
+    Script {
+        name: String,
+        enabled: bool,
+        script: String,
     },
 }
 
@@ -82,7 +89,8 @@ impl RuleConfig {
             | RuleConfig::DepthLimit { name, .. }
             | RuleConfig::ContentMatch { name, .. }
             | RuleConfig::ContentDeletion { name, .. }
-            | RuleConfig::LineDeletion { name, .. } => name,
+            | RuleConfig::LineDeletion { name, .. }
+            | RuleConfig::Script { name, .. } => name,
         }
     }
 
@@ -92,7 +100,7 @@ impl RuleConfig {
             | RuleConfig::DepthLimit { patterns, .. }
             | RuleConfig::ContentMatch { patterns, .. }
             | RuleConfig::LineDeletion { patterns, .. } => patterns,
-            RuleConfig::ContentDeletion { .. } => &[],
+            RuleConfig::ContentDeletion { .. } | RuleConfig::Script { .. } => &[],
         }
     }
 
@@ -102,8 +110,18 @@ impl Config {
     pub fn from_file(path: &str) -> Result<Self> {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read config file: {}", path))?;
-        serde_json::from_str(&content)
-            .with_context(|| format!("Failed to parse config file: {}", path))
+        let mut config: Config = serde_json::from_str(&content)
+            .with_context(|| format!("Failed to parse config file: {}", path))?;
+
+        // Compute config_dir from the config file path
+        let config_path = std::path::Path::new(path);
+        let config_dir = config_path
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| ".".to_string());
+        config.config_dir = config_dir;
+
+        Ok(config)
     }
 
     pub fn validate(&self) -> Vec<ConfigIssue> {
@@ -196,9 +214,10 @@ impl Config {
     }
 
     pub fn compile(self) -> Result<Vec<Box<dyn Rule>>> {
+        let config_dir = self.config_dir.clone();
         self.rules
             .into_iter()
-            .map(|r| r.compile())
+            .map(|r| r.compile(&config_dir))
             .filter_map(|r| r.transpose())
             .collect()
     }
@@ -215,7 +234,7 @@ fn build_globset(patterns: &[String]) -> Result<globset::GlobSet> {
 }
 
 impl RuleConfig {
-    fn compile(self) -> Result<Option<Box<dyn Rule>>> {
+    fn compile(self, config_dir: &str) -> Result<Option<Box<dyn Rule>>> {
         match self {
             RuleConfig::FilenameMatch {
                 name,
@@ -269,6 +288,18 @@ impl RuleConfig {
                 }
                 let globset = build_globset(&patterns)?;
                 Ok(Some(Box::new(LineDeletionRule::new(name, globset))))
+            }
+            RuleConfig::Script {
+                name,
+                enabled,
+                script,
+            } => {
+                if !enabled {
+                    return Ok(None);
+                }
+                let script_path = std::path::Path::new(config_dir).join(&script);
+                let script_path_str = script_path.to_string_lossy().to_string();
+                Ok(Some(Box::new(ScriptRule::new(name, &script_path_str)?)))
             }
         }
     }
